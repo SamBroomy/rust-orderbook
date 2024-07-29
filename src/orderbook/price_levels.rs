@@ -37,10 +37,6 @@ impl<K, V> SparseVec<K, V>
 where
     K: Eq + Hash + Ord + Clone,
 {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_capacity(capacity: usize) -> Self {
         SparseVec {
             data: HashMap::with_capacity(capacity),

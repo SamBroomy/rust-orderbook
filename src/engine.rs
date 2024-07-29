@@ -1,5 +1,3 @@
-use crate::orderbook::{Price, Quantity, Side};
-
 use super::orderbook::OrderBook;
 
 use std::{collections::HashMap, fmt::Display};
@@ -39,23 +37,23 @@ impl MatchingEngine {
         self.orderbooks.insert(pair.clone(), OrderBook::default());
         println!("Opening new orderbook for market {:?}", pair.to_string());
     }
-    pub fn place_limit_order(
-        &mut self,
-        pair: TradingPair,
-        side: Side,
-        price: Price,
-        qty: Quantity,
-    ) -> Result<(), String> {
-        match self.orderbooks.get_mut(&pair) {
-            Some(orderbook) => {
-                let _ = orderbook.add_limit_order(side, price, qty);
-                println!("Placed limit order at price level{:?}", price);
-                Ok(())
-            }
-            None => Err(format!(
-                "The order book for the given trading pair ({}) does not exist",
-                pair
-            )),
-        }
-    }
+    // pub fn place_limit_order(
+    //     &mut self,
+    //     pair: TradingPair,
+    //     side: Side,
+    //     price: Price,
+    //     qty: Quantity,
+    // ) -> Result<(), String> {
+    //     match self.orderbooks.get_mut(&pair) {
+    //         Some(orderbook) => {
+    //             let _ = orderbook.add_order(side, price, qty);
+    //             println!("Placed limit order at price level{:?}", price);
+    //             Ok(())
+    //         }
+    //         None => Err(format!(
+    //             "The order book for the given trading pair ({}) does not exist",
+    //             pair
+    //         )),
+    //     }
+    // }
 }

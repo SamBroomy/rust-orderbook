@@ -1,13 +1,12 @@
 use super::{
-    price_levels::SparseVec, FillResult, Order, OrderId, OrderStatus, OrderType, Price, PriceLevel,
-    Quantity, Side, TradeOrder,
+    price_levels::SparseVec, OrderId, OrderRequest, OrderResult, OrderType, Price, PriceLevel,
+    Quantity, Side, TradeExecution, TradeOrder,
 };
-use crate::Result;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
 #[derive(Debug)]
-pub(super) struct HalfBook {
+pub struct HalfBook {
     s: Side,
     // Price & Index of price Level
     price_map: BTreeSet<Price>,
@@ -33,32 +32,22 @@ impl HalfBook {
     }
 
     pub fn remove_order(&mut self, price: &Price, order_id: OrderId) -> Option<TradeOrder> {
-        if let Some(level) = self.price_levels.get_mut(price) {
-            let removed = level
-                .iter()
-                .position(|o| o.id == order_id)
-                .map(|i| level.remove(i))?;
-            if level.is_empty() {
-                self.price_levels.remove(price);
-                self.price_map.remove(price);
-            }
-            removed
-        } else {
-            None
+        let level = self.price_levels.get_mut(price)?;
+        let removed_order = level
+            .iter()
+            .position(|o| o.id == order_id)
+            .map(|i| level.remove(i))??;
+        if level.is_empty() {
+            self.price_levels.remove(price);
+            self.price_map.remove(price);
         }
-    }
-
-    pub fn best_prices(&self) -> Option<Price> {
-        match self.s {
-            Side::Ask => self.price_levels.min_index(),
-            Side::Bid => self.price_levels.max_index(),
-        }
+        Some(removed_order)
     }
 
     pub fn best_price(&self) -> Option<Price> {
         match self.s {
-            Side::Ask => self.price_map.iter().next().cloned(),
-            Side::Bid => self.price_map.iter().next_back().cloned(),
+            Side::Ask => self.price_levels.min_index(),
+            Side::Bid => self.price_levels.max_index(),
         }
     }
 
@@ -86,7 +75,10 @@ impl HalfBook {
     }
 
     pub fn show_depth(&self) {
-        let prices: Vec<Price> = self.iter_prices().collect();
+        let prices: Vec<_> = match self.s {
+            Side::Ask => self.price_map.iter().rev().cloned().collect(),
+            Side::Bid => self.price_map.iter().rev().cloned().collect(),
+        };
         self.print_price_levels(prices.iter());
     }
 
@@ -99,7 +91,7 @@ impl HalfBook {
             println!(
                 "Price: {} Qty: {}",
                 price,
-                level.iter().fold(0, |acc, o| acc + o.qty)
+                level.iter().fold(0, |acc, o| acc + o.remaining_qty)
             );
         }
     }
@@ -109,15 +101,25 @@ impl HalfBook {
             self.price_levels
                 .get(price)?
                 .iter()
-                .fold(0, |acc, o| acc + o.qty),
+                .fold(0, |acc, o| acc + o.remaining_qty),
         )
+    }
+
+    pub fn get_available_quantity(&self, target_price: Price) -> Quantity {
+        self.iter_prices()
+            .take_while(|&p| match self.s {
+                Side::Ask => p <= target_price,
+                Side::Bid => p >= target_price,
+            })
+            .map(|p| self.get_total_qty(&p).unwrap_or(0))
+            .sum()
     }
 }
 
 #[derive(Debug)]
 pub struct OrderBook {
-    bids: HalfBook,
     asks: HalfBook,
+    bids: HalfBook,
     // For fast order lookup / cancel OrderId -> (Side, PriceLevelIndex)
     order_loc: HashMap<OrderId, (Side, Price)>,
 }
@@ -131,8 +133,8 @@ impl Default for OrderBook {
 impl OrderBook {
     pub fn new() -> Self {
         Self {
-            bids: HalfBook::new(Side::Bid),
             asks: HalfBook::new(Side::Ask),
+            bids: HalfBook::new(Side::Bid),
             order_loc: HashMap::with_capacity(50_000),
         }
     }
@@ -145,20 +147,19 @@ impl OrderBook {
     }
 
     pub fn best_price_liq(&self) -> Option<()> {
-        println!("Best Bid Price: {}", self.best_bid_price()?);
+        println!("Best Bid Price: {}", self.best_bid()?);
         println!(
             "Bid price quantity: {}",
-            self.bids.get_total_qty(&self.best_bid_price()?)?
+            self.bids.get_total_qty(&self.best_bid()?)?
         );
-        println!("Best Ask Price: {}", self.best_ask_price()?);
+        println!("Best Ask Price: {}", self.best_ask()?);
         println!(
             "Ask price quantity: {}",
-            self.asks.get_total_qty(&self.best_ask_price()?)?
+            self.asks.get_total_qty(&self.best_ask()?)?
         );
         println!(
             "Spread: {}",
-            ((self.best_ask_price()? - self.best_bid_price()?) as f64
-                / self.best_ask_price()? as f64) as f32
+            ((self.best_ask()? - self.best_bid()?) as f64 / self.best_ask()? as f64) as f32
         );
         Some(())
     }
@@ -172,130 +173,128 @@ impl OrderBook {
     }
 
     pub fn best_prices(&self) -> (Option<Price>, Option<Price>) {
-        (self.bids.best_prices(), self.asks.best_prices())
-    }
-    // TODO: ARE THESE THE SAME?
-    pub fn best_price(&self) -> (Option<Price>, Option<Price>) {
         (self.bids.best_price(), self.asks.best_price())
     }
 
-    pub fn remove_order(&mut self, order_id: OrderId) -> Option<TradeOrder> {
-        let (side, price) = self.order_loc.get(&order_id)?;
-        match side {
-            Side::Bid => self.bids.remove_order(price, order_id),
-            Side::Ask => self.asks.remove_order(price, order_id),
-        }
-    }
-
-    /// Remove an order from the order book, returning the order if it was successfully removed.
-    pub fn cancel_order(&mut self, order_id: OrderId) -> Option<TradeOrder> {
-        let (s, i) = self.order_loc.get(&order_id)?;
-        let price = match s {
-            Side::Bid => self.bids.price_levels.get_mut(i),
-            Side::Ask => self.asks.price_levels.get_mut(i),
-        }?;
-        price
-            .iter()
-            .position(|o| o.id == order_id)
-            .map(|i| price.remove(i))?
-    }
-
-    fn create_new_order(&mut self, order: &Order) -> Result<OrderId> {
-        assert_ne!(order.order_type, OrderType::Market);
-        let book = match order.side {
+    pub fn remove_order(&mut self, order_id: OrderId) -> Option<OrderResult> {
+        let (side, price) = self.order_loc.remove(&order_id)?;
+        let book = match side {
             Side::Bid => &mut self.bids,
             Side::Ask => &mut self.asks,
         };
-        let order = TradeOrder::new(order.qty);
-        let order_id = order.id;
-        book.add_order(order_id, order);
-        Ok(order_id)
+
+        let order = book.remove_order(&price, order_id)?;
+        let order_request = OrderRequest {
+            side,
+            qty: order.remaining_qty,
+            order_type: OrderType::Limit(price),
+        };
+        Some(OrderResult::new(order_request, order))
     }
 
-    pub fn best_bid_price(&self) -> Option<Price> {
-        self.bids.best_price()
-    }
-
-    pub fn best_ask_price(&self) -> Option<Price> {
-        self.asks.best_price()
-    }
-
-    pub fn add_order(&mut self, order: Order) -> Result<FillResult> {
+    pub fn add_order(&mut self, order: OrderRequest) -> (OrderResult, Vec<TradeExecution>) {
         fn match_at_price_level(
+            price: Price,
             price_level: &mut VecDeque<TradeOrder>,
-            incoming_order_qty: &mut Quantity,
+            incoming_order: &mut TradeOrder,
             order_loc: &mut HashMap<OrderId, (Side, Price)>,
-        ) -> Quantity {
-            let mut matched_qty = 0;
-            while let Some(mut order) = price_level.pop_front() {
-                if order.qty > *incoming_order_qty {
-                    order.qty -= *incoming_order_qty;
-                    matched_qty += *incoming_order_qty;
-                    price_level.push_front(order);
-                    *incoming_order_qty = 0;
-                    break;
-                } else {
-                    *incoming_order_qty -= order.qty;
-                    matched_qty += order.qty;
-                    order_loc.remove(&order.id);
+            taker_side: &Side,
+            executions: &mut Vec<TradeExecution>,
+        ) {
+            while !price_level.is_empty() && incoming_order.remaining_qty > 0 {
+                if let Some(mut existing_order) = price_level.pop_front() {
+                    let fill_qty = existing_order.filled_by(incoming_order, price);
+                    executions.push(TradeExecution::new(
+                        fill_qty,
+                        price,
+                        incoming_order,
+                        &existing_order,
+                        taker_side.clone(),
+                    ));
+
+                    if existing_order.remaining_qty > 0 {
+                        price_level.push_front(existing_order);
+                    } else {
+                        order_loc.remove(&existing_order.id);
+                    }
+                    if incoming_order.remaining_qty == 0 {
+                        break;
+                    }
                 }
             }
-            matched_qty
         }
 
-        let mut remaining_order_qty = order.qty;
-        let mut fill_result = FillResult::default();
+        if let OrderType::FOK(_) = order.order_type {
+            let opposite_book = match order.side {
+                Side::Bid => &self.asks,
+                Side::Ask => &self.bids,
+            };
 
-        let book = match order.side {
+            let available_qty = opposite_book.get_available_quantity(order.price().unwrap());
+            println!("Available qty: {}", available_qty);
+            println!("Order qty: {}", order.qty);
+            if available_qty < order.qty {
+                return (OrderResult::new_cancelled(order), Vec::new());
+            }
+        };
+
+        let (mut new_order, id) = TradeOrder::new_with_id(order.qty);
+        let mut executions = Vec::new();
+
+        let opposite_book = match order.side {
             Side::Bid => &mut self.asks,
             Side::Ask => &mut self.bids,
         };
 
-        for p in book.iter_prices().filter(|p| match order.order_type {
-            OrderType::Limit(price) => match order.side {
-                Side::Bid => price >= *p,
-                Side::Ask => price <= *p,
-            },
-            // Market order no filtering required
-            OrderType::Market => true,
-        }) {
-            if let Some(price_level) = book.price_levels.get_mut(&p) {
-                let matched_qty = match_at_price_level(
-                    price_level,
-                    &mut remaining_order_qty,
-                    &mut self.order_loc,
-                );
-                if matched_qty != 0 {
-                    fill_result.filled_orders.push((matched_qty, p));
+        for p in opposite_book
+            .iter_prices()
+            .filter(|p| match order.order_type {
+                OrderType::Limit(price) | OrderType::IOC(price) | OrderType::FOK(price) => {
+                    match order.side {
+                        Side::Bid => price >= *p,
+                        Side::Ask => price <= *p,
+                    }
                 }
-                if remaining_order_qty == 0 {
+                // Market order no filtering required
+                OrderType::Market => true,
+            })
+        {
+            if let Some(price_level) = opposite_book.price_levels.get_mut(&p) {
+                match_at_price_level(
+                    p,
+                    price_level,
+                    &mut new_order,
+                    &mut self.order_loc,
+                    &order.side,
+                    &mut executions,
+                );
+                if new_order.remaining_qty == 0 {
                     break;
                 }
             }
         }
-        fill_result.remaining_qty = remaining_order_qty;
-        fill_result.status = if remaining_order_qty == 0 {
-            OrderStatus::Filled
-        } else {
-            match order.order_type {
-                OrderType::Market => {
-                    if remaining_order_qty == order.qty {
-                        OrderStatus::Cancelled
-                    } else {
-                        OrderStatus::PartiallyFilledMarket
-                    }
+
+        let result = match order.order_type {
+            OrderType::Market => OrderResult::new(order, new_order),
+            OrderType::Limit(price) => {
+                if new_order.remaining_qty > 0 {
+                    self.add_limit_order(order.side.clone(), price, new_order.clone());
                 }
-                OrderType::Limit(_) => {
-                    let id = self.create_new_order(&order)?;
-                    if remaining_order_qty == order.qty {
-                        OrderStatus::Open(id)
-                    } else {
-                        OrderStatus::PartiallyFilled(id)
-                    }
-                }
+                OrderResult::new(order, new_order)
             }
+            OrderType::IOC(_) => OrderResult::new(order, new_order),
+            OrderType::FOK(_) => OrderResult::new(order, new_order),
         };
-        Ok(fill_result)
+        (result, executions)
+    }
+
+    fn add_limit_order(&mut self, side: Side, price: Price, order: TradeOrder) {
+        let book = match side {
+            Side::Bid => &mut self.bids,
+            Side::Ask => &mut self.asks,
+        };
+        self.order_loc.insert(order.id, (side, price));
+        book.add_order(price, order);
     }
 
     fn spread(&self) -> Option<u64> {
