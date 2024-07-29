@@ -14,9 +14,6 @@ where
     K: Eq + Hash + Ord + Clone,
 {
     data: HashMap<K, V>,
-    len: usize,
-    max_index: Option<K>,
-    min_index: Option<K>,
 }
 
 impl<K, V> Default for SparseVec<K, V>
@@ -26,9 +23,6 @@ where
     fn default() -> Self {
         SparseVec {
             data: HashMap::new(),
-            len: 0,
-            max_index: None,
-            min_index: None,
         }
     }
 }
@@ -40,41 +34,39 @@ where
     pub fn with_capacity(capacity: usize) -> Self {
         SparseVec {
             data: HashMap::with_capacity(capacity),
-            ..Default::default()
         }
     }
 
-    pub fn insert(&mut self, index: K, value: V) {
-        if self.data.insert(index.clone(), value).is_none() {
-            self.len = self.len.max(self.data.len());
-            self.max_index = Some(
-                self.max_index
-                    .take()
-                    .map_or(index.clone(), |m| max(m, index.clone())),
-            );
-            self.min_index = Some(
-                self.min_index
-                    .take()
-                    .map_or(index.clone(), |m| min(m, index)),
-            );
-        }
+    pub fn insert(&mut self, index: K, value: V) -> Option<V> {
+        self.data.insert(index, value)
+
+        // if self.data.insert(index.clone(), value).is_none() {
+        //     self.max_index = Some(
+        //         self.max_index
+        //             .take()
+        //             .map_or(index.clone(), |m| max(m, index.clone())),
+        //     );
+        //     self.min_index = Some(
+        //         self.min_index
+        //             .take()
+        //             .map_or(index.clone(), |m| min(m, index)),
+        //     );
+        // }
     }
 
     pub fn remove(&mut self, index: &K) -> Option<V> {
-        let result = self.data.remove(index);
-        if result.is_some() {
-            if Some(index) == self.max_index.as_ref() {
-                self.max_index = self.data.keys().max().cloned();
-            }
-            if Some(index) == self.min_index.as_ref() {
-                self.min_index = self.data.keys().min().cloned();
-            }
-            self.len = self.len.max(self.data.len());
-            // if index == self.len - 1 {
-            //     self.len = self.max_index.map_or(0, |max| max + 1);
-            // }
-        }
-        result
+        self.data.remove(index)
+
+        // let result = self.data.remove(index);
+        // if result.is_some() {
+        //     if Some(index) == self.max_index.as_ref() {
+        //         self.max_index = self.data.keys().max().cloned();
+        //     }
+        //     if Some(index) == self.min_index.as_ref() {
+        //         self.min_index = self.data.keys().min().cloned();
+        //     }
+        // }
+        // result
     }
 
     pub fn get(&self, index: &K) -> Option<&V> {
@@ -85,23 +77,52 @@ where
         self.data.get_mut(index)
     }
 
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
     pub fn max_index(&self) -> Option<K> {
-        self.max_index.clone()
+        self.data.keys().max().cloned()
     }
 
     pub fn min_index(&self) -> Option<K> {
-        self.min_index.clone()
+        self.data.keys().min().cloned()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         self.data.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sparse_vec_insert() {
+        let mut sv = SparseVec::<u64, u64>::default();
+        sv.insert(5, 50);
+        sv.insert(10, 100);
+        assert_eq!(sv.get(&5), Some(&50));
+        assert_eq!(sv.get(&10), Some(&100));
+    }
+
+    #[test]
+    fn test_sparse_vec_remove() {
+        let mut sv = SparseVec::<u64, u64>::default();
+        sv.insert(5, 50);
+        sv.insert(10, 100);
+        assert_eq!(sv.remove(&5), Some(50));
+        assert_eq!(sv.get(&5), None);
+    }
+
+    #[test]
+    fn test_sparse_vec_max_min_index() {
+        let mut sv = SparseVec::<u64, u64>::default();
+        sv.insert(5, 50);
+        sv.insert(10, 100);
+        sv.insert(3, 30);
+        assert_eq!(sv.max_index(), Some(10));
+        assert_eq!(sv.min_index(), Some(3));
     }
 }

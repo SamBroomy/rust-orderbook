@@ -233,7 +233,7 @@ impl OrderBook {
             }
         };
 
-        let (mut new_order, id) = TradeOrder::new_with_id(order.qty);
+        let mut new_order = TradeOrder::new(order.qty);
         let mut executions = Vec::new();
 
         let opposite_book = match order.side {
@@ -263,6 +263,10 @@ impl OrderBook {
                     &order.side,
                     &mut executions,
                 );
+                if price_level.is_empty() {
+                    opposite_book.price_levels.remove(&p);
+                    opposite_book.price_map.remove(&p);
+                }
                 if new_order.remaining_qty == 0 {
                     break;
                 }
@@ -301,5 +305,276 @@ impl OrderBook {
 
     fn depth(&self) -> Option<(usize, usize)> {
         Some((self.asks.price_map.len(), self.bids.price_map.len()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_half_book_add_order() {
+        let mut book = HalfBook::new(Side::Ask);
+        let order = TradeOrder::new(100);
+        book.add_order(10, order);
+        assert_eq!(book.best_price(), Some(10));
+    }
+
+    #[test]
+    fn test_half_book_remove_order() {
+        let mut book = HalfBook::new(Side::Ask);
+        let order = TradeOrder::new(100);
+        let order_id = order.id;
+        book.add_order(10, order);
+        assert!(book.remove_order(&10, order_id).is_some());
+        assert!(book.best_price().is_none());
+    }
+
+    #[test]
+    fn test_order_book_add_order() {
+        let mut book = OrderBook::new();
+        let order = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        let (result, executions) = book.add_order(order);
+        assert_eq!(result.status, OrderStatus::Open);
+        assert!(executions.is_empty());
+        assert_eq!(book.best_ask(), Some(10));
+    }
+
+    #[test]
+    fn test_order_book_match_orders() {
+        let mut book = OrderBook::new();
+        let ask_order = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        book.add_order(ask_order);
+        let bid_order = OrderRequest::new(Side::Bid, 50, OrderType::Limit(10));
+        let (result, executions) = book.add_order(bid_order);
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].qty, 50);
+    }
+
+    #[test]
+    fn test_order_book_market_order() {
+        let mut book = OrderBook::new();
+        let ask_order = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        book.add_order(ask_order);
+        let market_order = OrderRequest::new(Side::Bid, 50, OrderType::Market);
+        let (result, executions) = book.add_order(market_order);
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].qty, 50);
+        assert_eq!(executions[0].price, 10);
+    }
+
+    // Helper function to create a limit order request
+    fn limit_order(side: Side, qty: Quantity, price: Price) -> OrderRequest {
+        OrderRequest::new(side, qty, OrderType::Limit(price))
+    }
+
+    #[test]
+    fn test_empty_order_book() {
+        let book = OrderBook::new();
+        assert_eq!(book.best_bid(), None);
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.spread(), None);
+    }
+
+    #[test]
+    fn test_add_and_remove_orders() {
+        let mut book = OrderBook::new();
+
+        // Add a bid order
+        let (bid_result, _) = book.add_order(limit_order(Side::Bid, 100, 10));
+        assert_eq!(book.best_bid(), Some(10));
+
+        // Add an ask order
+        let (ask_result, _) = book.add_order(limit_order(Side::Ask, 100, 11));
+        assert_eq!(book.best_ask(), Some(11));
+
+        // Remove the bid order
+        book.remove_order(bid_result.get_id());
+        assert_eq!(book.best_bid(), None);
+
+        // Remove the ask order
+        book.remove_order(ask_result.get_id());
+        assert_eq!(book.best_ask(), None);
+    }
+
+    #[test]
+    fn test_order_matching() {
+        let mut book = OrderBook::new();
+
+        // Add some initial orders
+        book.add_order(limit_order(Side::Ask, 100, 10));
+        book.add_order(limit_order(Side::Ask, 100, 11));
+        book.add_order(limit_order(Side::Bid, 100, 9));
+
+        // Add a matching bid order
+        let (result, executions) = book.add_order(limit_order(Side::Bid, 150, 10));
+
+        assert_eq!(result.status, OrderStatus::PartiallyFilled);
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].qty, 100);
+        assert_eq!(executions[0].price, 10);
+        assert_eq!(book.best_ask(), Some(11));
+        assert_eq!(book.best_bid(), Some(10));
+    }
+
+    #[test]
+    fn test_market_order() {
+        let mut book = OrderBook::new();
+
+        // Add some limit orders
+        book.add_order(limit_order(Side::Ask, 50, 10));
+        book.add_order(limit_order(Side::Ask, 100, 11));
+
+        // Add a market buy order
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Bid, 200, OrderType::Market));
+
+        assert_eq!(result.status, OrderStatus::PartiallyFilledMarket);
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0].qty, 50);
+        assert_eq!(executions[0].price, 10);
+        assert_eq!(executions[1].qty, 100);
+        assert_eq!(executions[1].price, 11);
+    }
+
+    #[test]
+    fn test_ioc_order() {
+        let mut book = OrderBook::new();
+
+        // Add a limit sell order
+        book.add_order(limit_order(Side::Ask, 100, 10));
+
+        // Add an IOC buy order that partially fills
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Bid, 150, OrderType::IOC(10)));
+
+        assert_eq!(result.status, OrderStatus::PartiallyFilled);
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].qty, 100);
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.best_bid(), None);
+    }
+
+    #[test]
+    fn test_fok_order() {
+        let mut book = OrderBook::new();
+
+        // Add some limit sell orders
+        book.add_order(limit_order(Side::Ask, 50, 10));
+        book.add_order(limit_order(Side::Ask, 50, 10));
+
+        // Add a FOK buy order that fully fills
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Bid, 100, OrderType::FOK(10)));
+
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0].qty, 50);
+        assert_eq!(executions[1].qty, 50);
+        assert_eq!(book.best_ask(), None);
+
+        // Add a FOK buy order that doesn't fill
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Bid, 100, OrderType::FOK(9)));
+
+        assert_eq!(result.status, OrderStatus::Cancelled);
+        assert!(executions.is_empty());
+    }
+
+    #[test]
+    fn test_price_levels() {
+        let mut book = OrderBook::new();
+
+        // Add multiple orders at the same price level
+        book.add_order(limit_order(Side::Ask, 100, 10));
+        book.add_order(limit_order(Side::Ask, 100, 10));
+        book.add_order(limit_order(Side::Ask, 100, 11));
+
+        assert_eq!(book.best_ask(), Some(10));
+
+        // Match against the first price level
+        let (_, executions) = book.add_order(limit_order(Side::Bid, 150, 10));
+
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0].qty, 100);
+        assert_eq!(executions[1].qty, 50);
+        assert_eq!(book.best_ask(), Some(10));
+
+        // Match the remaining order at the first price level
+        let (_, executions) = book.add_order(limit_order(Side::Bid, 100, 10));
+
+        assert_eq!(executions.len(), 1);
+        assert_eq!(executions[0].qty, 50);
+        assert_eq!(book.best_ask(), Some(11));
+    }
+
+    #[test]
+    fn test_order_cancellation() {
+        let mut book = OrderBook::new();
+
+        // Add some orders
+        let (bid_result, _) = book.add_order(limit_order(Side::Bid, 100, 10));
+        let (ask_result, _) = book.add_order(limit_order(Side::Ask, 100, 11));
+
+        // Cancel the bid order
+        let cancelled_bid = book.remove_order(bid_result.get_id()).unwrap();
+        assert_eq!(cancelled_bid.status, OrderStatus::Open);
+        assert_eq!(book.best_bid(), None);
+
+        // Try to cancel the same order again
+        assert!(book.remove_order(bid_result.get_id()).is_none());
+
+        // Cancel the ask order
+        let cancelled_ask = book.remove_order(ask_result.get_id()).unwrap();
+        assert_eq!(cancelled_ask.status, OrderStatus::Open);
+        assert_eq!(book.best_ask(), None);
+    }
+
+    #[test]
+    fn test_complex_matching_scenario() {
+        let mut book = OrderBook::new();
+
+        // Add initial orders
+        book.add_order(limit_order(Side::Ask, 100, 10));
+        book.add_order(limit_order(Side::Ask, 200, 11));
+        book.add_order(limit_order(Side::Ask, 300, 12));
+        book.add_order(limit_order(Side::Bid, 100, 8));
+        book.add_order(limit_order(Side::Bid, 200, 7));
+
+        println!("{:#?}", book);
+        // Add a large market buy order
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Bid, 650, OrderType::Market));
+
+        assert_eq!(result.status, OrderStatus::PartiallyFilledMarket);
+        assert_eq!(executions.len(), 3);
+        assert_eq!(executions[0].qty, 100);
+        assert_eq!(executions[0].price, 10);
+        assert_eq!(executions[1].qty, 200);
+        assert_eq!(executions[1].price, 11);
+        assert_eq!(executions[2].qty, 300);
+        assert_eq!(executions[2].price, 12);
+
+        let (result, executions) =
+            book.add_order(OrderRequest::new(Side::Ask, 110, OrderType::Market));
+
+        assert_eq!(result.status, OrderStatus::Filled);
+        assert_eq!(executions.len(), 2);
+        assert_eq!(executions[0].qty, 100);
+        assert_eq!(executions[0].price, 8);
+        assert_eq!(executions[1].qty, 10);
+        assert_eq!(executions[1].price, 7);
+
+        assert_eq!(book.depth(), Some((0, 1)));
+        assert_eq!(book.bids.get_available_quantity(7), 190);
+
+        println!("{:#?}", book);
+        println!("{:#?}", result);
+        println!("{:#?}", executions);
+
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.best_bid(), Some(7));
     }
 }

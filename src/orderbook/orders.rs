@@ -84,11 +84,13 @@ impl OrderRequest {
 pub enum OrderType {
     Market,
     Limit(Price),
+    // Immediate or Cancel
     IOC(Price),
+    // Fill or Kill
     FOK(Price),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub enum OrderStatus {
     #[default]
     Uninitialized,
@@ -216,5 +218,90 @@ impl TradeExecution {
             take_side: taker_side,
             timestamp: timestamp(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_trade_order_creation() {
+        let order = TradeOrder::new(100);
+        assert_eq!(order.remaining_qty, 100);
+        assert_eq!(order.initial_qty, 100);
+        assert!(order.fills.is_empty());
+    }
+
+    #[test]
+    fn test_trade_order_fill() {
+        let mut order = TradeOrder::new(100);
+        let mut fill_qty = 60;
+        order.fill(&mut fill_qty, 10, create_order_id());
+        assert_eq!(order.remaining_qty, 40);
+        assert_eq!(order.fills.len(), 1);
+        assert_eq!(fill_qty, 0);
+    }
+
+    #[test]
+    fn test_trade_order_fill_by_same_quantity() {
+        let mut order1 = TradeOrder::new(100);
+        let mut order2 = TradeOrder::new(100);
+        let fill_qty = order1.filled_by(&mut order2, 10);
+        assert_eq!(fill_qty, 100);
+        assert_eq!(order1.remaining_qty, 0);
+        assert_eq!(order2.remaining_qty, 0);
+        assert_eq!(order1.fills.len(), 1);
+        assert_eq!(order2.fills.len(), 1);
+    }
+
+    #[test]
+    fn test_trade_order_fill_by_larger_quantity() {
+        let mut order1 = TradeOrder::new(50);
+        let mut order2 = TradeOrder::new(100);
+        let fill_qty = order1.filled_by(&mut order2, 10);
+        assert_eq!(fill_qty, 50);
+        assert_eq!(order1.remaining_qty, 0);
+        assert_eq!(order2.remaining_qty, 50);
+        assert_eq!(order1.fills.len(), 1);
+        assert_eq!(order2.fills.len(), 1);
+    }
+
+    #[test]
+    fn test_trade_order_fill_by_many_smaller_quantities() {
+        let mut order1 = TradeOrder::new(100);
+        let mut order2 = TradeOrder::new(10);
+        let mut order3 = TradeOrder::new(10);
+        let mut order4 = TradeOrder::new(10);
+        let fill_qty = order1.filled_by(&mut order2, 10);
+        assert_eq!(fill_qty, 10);
+        let fill_qty = order1.filled_by(&mut order3, 10);
+        assert_eq!(fill_qty, 10);
+        let fill_qty = order1.filled_by(&mut order4, 10);
+        assert_eq!(fill_qty, 10);
+        assert_eq!(order1.remaining_qty, 70);
+        assert_eq!(order2.remaining_qty, 0);
+        assert_eq!(order3.remaining_qty, 0);
+        assert_eq!(order4.remaining_qty, 0);
+        assert_eq!(order1.fills.len(), 3);
+        assert_eq!(order2.fills.len(), 1);
+        assert_eq!(order3.fills.len(), 1);
+        assert_eq!(order4.fills.len(), 1);
+    }
+
+    #[test]
+    fn test_order_request() {
+        let request = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        assert_eq!(request.price(), Some(10));
+        let request = OrderRequest::new(Side::Bid, 100, OrderType::Market);
+        assert_eq!(request.price(), None);
+    }
+
+    #[test]
+    fn test_order_result() {
+        let request = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        let trade_order = TradeOrder::new(100);
+        let result = OrderResult::new(request, trade_order);
+        assert_eq!(result.status, OrderStatus::Open);
     }
 }
