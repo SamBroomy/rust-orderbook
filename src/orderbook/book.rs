@@ -1,7 +1,6 @@
-use super::{
-    price_levels::SparseVec, OrderId, OrderRequest, OrderResult, OrderType, Price, PriceLevel,
-    Quantity, Side, TradeExecution, TradeOrder,
-};
+use super::orders::*;
+use super::price_levels::SparseVec;
+use super::types::*;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 
@@ -184,11 +183,7 @@ impl OrderBook {
         };
 
         let order = book.remove_order(&price, order_id)?;
-        let order_request = OrderRequest {
-            side,
-            qty: order.remaining_qty,
-            order_type: OrderType::Limit(price),
-        };
+        let order_request = OrderRequest::new(side, order.remaining_qty, OrderType::Limit(price));
         Some(OrderResult::new(order_request, order))
     }
 
