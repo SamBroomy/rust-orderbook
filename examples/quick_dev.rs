@@ -1,7 +1,4 @@
-use orderbooklib::{
-    HalfBook, OrderBook, OrderId, OrderRequest, OrderResult, OrderStatus, OrderType, Price,
-    Quantity, Side, TradeOrder,
-};
+use orderbooklib::{HalfBook, OrderBook, OrderRequest, OrderType, Side, TradeOrder};
 
 fn halfbook() {
     let mut ask_book = HalfBook::new(Side::Ask);

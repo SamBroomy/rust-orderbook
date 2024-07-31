@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use super::types::*;
 
 #[derive(Debug, Clone)]
@@ -80,7 +82,7 @@ impl OrderRequest {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum OrderType {
     Market,
     Limit(Price),
@@ -88,6 +90,17 @@ pub enum OrderType {
     IOC(Price),
     // Fill or Kill
     FOK(Price),
+}
+
+impl Display for OrderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderType::Market => write!(f, "Market"),
+            OrderType::Limit(_) => write!(f, "Limit"),
+            OrderType::IOC(_) => write!(f, "IOC"),
+            OrderType::FOK(_) => write!(f, "FOK"),
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq)]

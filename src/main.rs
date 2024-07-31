@@ -31,9 +31,17 @@
 //     ob.get_best_bid_price().unwrap();
 // }
 
-fn main() {
-    println!("Hello, world!");
-    let mut engine = orderbooklib::MatchingEngine::new();
-    let pair = orderbooklib::TradingPair::new("BTC".to_string(), "USD".to_string());
-    engine.add_new_market(pair);
+// ... other existing imports and modules ...
+
+use orderbooklib::App;
+
+fn main() -> std::io::Result<()> {
+    let mut app = App::new();
+    app.run()
 }
+// fn main() {
+//     println!("Hello, world!");
+//     let mut engine = orderbooklib::MatchingEngine::new();
+//     let pair = orderbooklib::TradingPair::new("BTC".to_string(), "USD".to_string());
+//     engine.add_new_market(pair);
+// }

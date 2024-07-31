@@ -117,10 +117,10 @@ impl HalfBook {
 
 #[derive(Debug)]
 pub struct OrderBook {
-    asks: HalfBook,
-    bids: HalfBook,
+    pub asks: HalfBook,
+    pub bids: HalfBook,
     // For fast order lookup / cancel OrderId -> (Side, PriceLevelIndex)
-    order_loc: HashMap<OrderId, (Side, Price)>,
+    pub order_loc: HashMap<OrderId, (Side, Price)>,
 }
 
 impl Default for OrderBook {

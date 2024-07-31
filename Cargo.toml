@@ -18,5 +18,8 @@ debug = true
 
 
 [dependencies]
-uuid = { version = "1.10", features = ["v7", "fast-rng"] }
+uuid = { version = "1.10", features = ["v4", "v7", "fast-rng"] }
+ratatui = "0.27"
+crossterm = "0.27"
+chrono = "0.4"
 rand = "0.8"
