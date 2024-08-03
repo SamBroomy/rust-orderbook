@@ -2,30 +2,147 @@ use std::fmt::Display;
 
 use super::types::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum OrderType {
+    Market,
+    Limit(Price),
+    // Immediate or Cancel
+    IOC(Price),
+    // Fill or Kill
+    FOK(Price),
+}
+
+impl Display for OrderType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OrderType::Market => write!(f, "Market"),
+            OrderType::Limit(_) => write!(f, "Limit"),
+            OrderType::IOC(_) => write!(f, "IOC"),
+            OrderType::FOK(_) => write!(f, "FOK"),
+        }
+    }
+}
+
+impl OrderType {
+    pub fn price(&self) -> Option<Price> {
+        match self {
+            OrderType::Limit(price) => Some(*price),
+            OrderType::IOC(price) => Some(*price),
+            OrderType::FOK(price) => Some(*price),
+            OrderType::Market => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OrderStatus {
+    Open,
+    Filled,
+    PartiallyFilled,
+    Cancelled,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct Fill {
+    pub qty: Quantity,
+    pub price: Price,
+    pub timestamp: Timestamp,
+    pub order_id: OrderId,
+}
+
+impl Fill {
+    pub fn new(qty: Quantity, price: Price, order_id: OrderId) -> Self {
+        Self {
+            qty,
+            price,
+            timestamp: timestamp(),
+            order_id,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct OrderRequest {
+    id: OrderId,
+    pub side: Side,
+    pub qty: Quantity,
+    pub order_type: OrderType,
+}
+
+impl OrderRequest {
+    pub fn new(side: Side, qty: Quantity, order_type: OrderType) -> Self {
+        Self {
+            id: create_order_id(),
+            side,
+            qty,
+            order_type,
+        }
+    }
+
+    pub fn new_with_id(id: OrderId, side: Side, qty: Quantity, order_type: OrderType) -> Self {
+        Self {
+            id,
+            side,
+            qty,
+            order_type,
+        }
+    }
+
+    pub fn new_with_other_id(
+        id: impl AsRef<[u8]>,
+        side: Side,
+        qty: Quantity,
+        order_type: OrderType,
+    ) -> Self {
+        Self {
+            id: create_id_from_bytes(id),
+            side,
+            qty,
+            order_type,
+        }
+    }
+
+    pub fn price(&self) -> Option<Price> {
+        self.order_type.price()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TradeOrder {
     pub id: OrderId,
+    pub side: Side,
     pub remaining_qty: Quantity,
-    pub initial_qty: Quantity,
-    pub fills: Vec<Fill>,
-    pub timestamp: Timestamp,
+    initial_qty: Quantity,
+    fills: Vec<Fill>,
+    pub order_type: OrderType,
+    timestamp: Timestamp,
+}
+
+impl From<OrderRequest> for TradeOrder {
+    fn from(order_request: OrderRequest) -> Self {
+        Self {
+            id: order_request.id,
+            side: order_request.side,
+            remaining_qty: order_request.qty,
+            initial_qty: order_request.qty,
+            fills: Vec::new(),
+            order_type: order_request.order_type,
+            timestamp: timestamp(),
+        }
+    }
 }
 
 impl TradeOrder {
     pub fn new(qty: Quantity) -> Self {
         Self {
             id: create_order_id(),
+            side: Side::Ask,
             remaining_qty: qty,
             initial_qty: qty,
             fills: Vec::new(),
+            order_type: OrderType::Market,
             timestamp: timestamp(),
         }
-    }
-
-    pub fn new_with_id(qty: Quantity) -> (Self, OrderId) {
-        let new = Self::new(qty);
-        let id = new.id;
-        (new, id)
     }
 
     /// Fills the order with the given quantity and price and returns the remaining quantity if the order was fully filled.
@@ -48,140 +165,80 @@ impl TradeOrder {
     pub fn filled_quantity(&self) -> Quantity {
         self.initial_qty - self.remaining_qty
     }
-}
 
-pub struct OrderRequest {
-    pub side: Side,
-    pub qty: Quantity,
-    pub order_type: OrderType,
-}
-
-impl From<OrderRequest> for (Side, TradeOrder, OrderId, OrderType) {
-    fn from(val: OrderRequest) -> Self {
-        let (trade_order, id) = TradeOrder::new_with_id(val.qty);
-        (val.side, trade_order, id, val.order_type)
+    /// Cancels the order with the given quantity and returns the remaining quantity if the order was fully cancelled.
+    pub fn cancel(&mut self, qty: Quantity) {
+        let qty = qty.min(self.remaining_qty);
+        self.remaining_qty -= qty;
     }
 }
 
-impl OrderRequest {
-    pub fn new(side: Side, qty: Quantity, order_type: OrderType) -> Self {
-        Self {
-            side,
-            qty,
-            order_type,
-        }
-    }
-
-    pub fn price(&self) -> Option<Price> {
-        match &self.order_type {
-            OrderType::Limit(price) => Some(*price),
-            OrderType::IOC(price) => Some(*price),
-            OrderType::FOK(price) => Some(*price),
-            OrderType::Market => None,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum OrderType {
-    Market,
-    Limit(Price),
-    // Immediate or Cancel
-    IOC(Price),
-    // Fill or Kill
-    FOK(Price),
-}
-
-impl Display for OrderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            OrderType::Market => write!(f, "Market"),
-            OrderType::Limit(_) => write!(f, "Limit"),
-            OrderType::IOC(_) => write!(f, "IOC"),
-            OrderType::FOK(_) => write!(f, "FOK"),
-        }
-    }
-}
-
-#[derive(Debug, Default, PartialEq)]
-pub enum OrderStatus {
-    #[default]
-    Uninitialized,
-    Open,
-    Filled,
-    PartiallyFilledMarket,
-    PartiallyFilled,
-    Cancelled,
-}
-
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct Fill {
-    pub qty: Quantity,
-    pub price: Price,
-    pub timestamp: Timestamp,
-    pub order_id: OrderId,
-}
-
-impl Fill {
-    pub fn new(qty: Quantity, price: Price, order_id: OrderId) -> Self {
-        Self {
-            qty,
-            price,
-            timestamp: timestamp(),
-            order_id,
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct OrderResult {
     trade_id: OrderId,
     side: Side,
-    order_type: OrderType, // Price in order type
+    order_type: OrderType,
     initial_qty: Quantity,
-    remaining_qty: Quantity,
+    pub remaining_qty: Quantity,
     fills: Vec<Fill>,
     pub status: OrderStatus,
 }
 
-impl OrderResult {
-    pub fn new(order: OrderRequest, trade_order: TradeOrder) -> Self {
+impl From<TradeOrder> for OrderResult {
+    fn from(trade_order: TradeOrder) -> Self {
         let status = if trade_order.remaining_qty == 0 {
             OrderStatus::Filled
         } else if trade_order.fills.is_empty() {
-            match order.order_type {
+            match trade_order.order_type {
                 OrderType::Market => OrderStatus::Cancelled,
                 OrderType::Limit(_) => OrderStatus::Open,
                 OrderType::IOC(_) => OrderStatus::Cancelled,
                 OrderType::FOK(_) => OrderStatus::Cancelled,
             }
         } else {
-            match order.order_type {
-                OrderType::Market => OrderStatus::PartiallyFilledMarket,
+            match trade_order.order_type {
+                OrderType::Market => OrderStatus::PartiallyFilled,
+                OrderType::Limit(_) => OrderStatus::PartiallyFilled,
                 OrderType::IOC(_) => OrderStatus::PartiallyFilled,
                 OrderType::FOK(_) => OrderStatus::Cancelled,
-                OrderType::Limit(_) => OrderStatus::PartiallyFilled,
             }
         };
         Self {
             trade_id: trade_order.id,
-            side: order.side,
-            order_type: order.order_type,
-            initial_qty: order.qty,
+            side: trade_order.side,
+            order_type: trade_order.order_type,
+            initial_qty: trade_order.initial_qty,
             remaining_qty: trade_order.remaining_qty,
             fills: trade_order.fills,
             status,
         }
     }
+}
 
-    pub fn new_cancelled(order: OrderRequest) -> Self {
+impl From<OrderRequest> for OrderResult {
+    fn from(order_request: OrderRequest) -> Self {
         Self {
-            trade_id: uuid::Uuid::nil(),
-            side: order.side,
-            order_type: order.order_type,
-            initial_qty: order.qty,
-            remaining_qty: order.qty,
+            trade_id: order_request.id,
+            side: order_request.side,
+            order_type: order_request.order_type,
+            initial_qty: order_request.qty,
+            remaining_qty: order_request.qty,
             fills: Vec::new(),
+            status: OrderStatus::Cancelled,
+        }
+    }
+}
+
+impl OrderResult {
+    pub fn cancelled(trade_order: TradeOrder) -> Self {
+        Self {
+            trade_id: trade_order.id,
+            side: trade_order.side,
+            order_type: trade_order.order_type,
+            initial_qty: trade_order.initial_qty,
+            remaining_qty: trade_order.remaining_qty,
+            fills: trade_order.fills,
             status: OrderStatus::Cancelled,
         }
     }
@@ -194,10 +251,6 @@ impl OrderResult {
             qty += fill.qty;
         }
         total as f32 / qty as f32
-    }
-
-    pub fn update_remaining_qty(&mut self, qty: u64) {
-        self.remaining_qty = qty;
     }
 
     pub fn get_id(&self) -> OrderId {
@@ -313,8 +366,13 @@ mod tests {
     #[test]
     fn test_order_result() {
         let request = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
-        let trade_order = TradeOrder::new(100);
-        let result = OrderResult::new(request, trade_order);
+        let id = request.id;
+        let trade_order = TradeOrder::from(request);
+        let result = OrderResult::from(trade_order);
         assert_eq!(result.status, OrderStatus::Open);
+        assert_eq!(result.remaining_qty, 100);
+        assert_eq!(result.initial_qty, 100);
+        assert_eq!(result.fills.len(), 0);
+        assert_eq!(result.get_id(), id);
     }
 }

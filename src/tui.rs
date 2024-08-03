@@ -52,7 +52,7 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         Self {
-            order_book: OrderBook::new(),
+            order_book: OrderBook::default(),
             current_side: Side::Bid,
             current_order_type: OrderType::Limit(0),
             input_price: String::new(),
@@ -356,9 +356,9 @@ impl App {
             OrderType::IOC(_) => OrderType::IOC(price),
             OrderType::FOK(_) => OrderType::FOK(price),
         };
-        let order_type = self.current_order_type.clone();
+        let order_type = self.current_order_type;
 
-        let order = OrderRequest::new(self.current_side.clone(), quantity, order_type.clone());
+        let order = OrderRequest::new(self.current_side, quantity, order_type);
         let (result, executions) = self.order_book.add_order(order);
 
         self.update_order_history(price, quantity);
@@ -372,8 +372,8 @@ impl App {
     fn update_order_history(&mut self, price: u64, quantity: u64) {
         let entry = OrderHistoryEntry {
             time: chrono::Local::now().format("%H:%M:%S").to_string(),
-            side: self.current_side.clone(),
-            order_type: self.current_order_type.clone(),
+            side: self.current_side,
+            order_type: self.current_order_type,
             price,
             quantity,
         };

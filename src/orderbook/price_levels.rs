@@ -76,10 +76,6 @@ where
         self.data.get_mut(index)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
     pub fn max_index(&self) -> Option<K> {
         self.data.keys().max().cloned()
     }

@@ -8,7 +8,8 @@ fn halfbook() {
     ask_book.add_order(200, order);
     let order = TradeOrder::new(300);
     ask_book.add_order(300, order);
-    let (order, id) = TradeOrder::new_with_id(100);
+    let order = TradeOrder::new(100);
+    let id = order.id;
     ask_book.add_order(100, order);
     println!("{:#?}", ask_book);
     println!("{:?}", ask_book.best_price());
@@ -28,7 +29,7 @@ fn main() {
 
     println!("------------------------");
 
-    let mut orderbook = OrderBook::new();
+    let mut orderbook = OrderBook::default();
 
     let order = OrderRequest::new(Side::Ask, 100, OrderType::Limit(200));
     println!("{:?}", orderbook.add_order(order));
@@ -58,13 +59,14 @@ fn main() {
     let order = OrderRequest::new(Side::Bid, 50, OrderType::Limit(300));
     println!("{:#?}", orderbook.add_order(order));
     let order = OrderRequest::new(Side::Bid, 400, OrderType::Limit(50));
+    println!("{:#?}", orderbook.add_order(order));
 
     println!("{:#?}", orderbook);
     println!("{:?}", orderbook.best_ask());
     println!("{:?}", orderbook.best_bid());
     println!("{:?}", orderbook.best_prices());
     orderbook.show_depth();
-    println!("{:?}", orderbook.remove_order(id));
+    println!("{:?}", orderbook.delete_order(id));
     println!("{:?}", orderbook.best_ask());
     println!("{:?}", orderbook.best_bid());
     println!("{:?}", orderbook.best_prices());
@@ -74,7 +76,7 @@ fn main() {
 
     println!("---------------------------------");
 
-    let mut orderbook = OrderBook::new();
+    let mut orderbook = OrderBook::default();
 
     // Add some initial orders
     let order = OrderRequest::new(Side::Ask, 100, OrderType::Limit(200));
