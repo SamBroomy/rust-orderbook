@@ -69,12 +69,23 @@ struct OrderBookState {
     state: BookState,
 }
 
-impl OrderBookState {
-    fn new() -> Self {
+impl Default for OrderBookState {
+    fn default() -> Self {
         OrderBookState {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
             last_update_id: 0,
+            state: BookState::Buffering,
+        }
+    }
+}
+
+impl OrderBookState {
+    fn new(last_update_id: u64) -> Self {
+        OrderBookState {
+            bids: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            last_update_id,
             state: BookState::Buffering,
         }
     }
@@ -85,7 +96,8 @@ impl OrderBookState {
             symbol.to_uppercase()
         );
         let snapshot: DepthSnapshot = reqwest::get(url).await?.json().await?;
-        let mut state = OrderBookState::new();
+
+        let mut state = OrderBookState::new(snapshot.last_update_id);
         state.apply_snapshot(snapshot);
         Ok(state)
     }
@@ -170,7 +182,7 @@ static BINANCE_WS_API: &str = "wss://stream.binance.com:9443";
 impl DepthBook {
     pub fn new(symbol: String) -> Self {
         Self {
-            state: Arc::new(RwLock::new(OrderBookState::new())),
+            state: Arc::new(RwLock::new(OrderBookState::default())),
             symbol,
         }
     }
@@ -194,7 +206,8 @@ impl DepthBook {
             snapshot.last_update_id
         );
         // Step 5: Initialize order book with snapshot
-        let mut state = OrderBookState::from_snapshot(self.symbol.clone()).await?;
+        let mut state = self.state.write().await;
+        state.apply_snapshot(snapshot);
 
         // Step 6: Process buffered updates
 
