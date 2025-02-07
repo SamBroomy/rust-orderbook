@@ -1,11 +1,5 @@
-use super::TradeOrder;
-
+use super::{OrderId, Timestamp};
 use uuid::Uuid;
-pub type OrderId = uuid::Uuid;
-pub type Quantity = u64;
-pub type Price = u64;
-pub type PriceLevel = std::collections::VecDeque<TradeOrder>;
-pub type Timestamp = std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Side {

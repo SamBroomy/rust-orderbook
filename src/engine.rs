@@ -93,7 +93,7 @@ impl MatchingEngine {
             .ok_or_else(|| format!("Market for {} does not exist", pair))
     }
 
-    pub fn get_spread(&self, pair: &TradingPair) -> Result<Option<u64>, String> {
+    pub fn get_spread(&self, pair: &TradingPair) -> Result<Option<Price>, String> {
         self.orderbooks
             .get(pair)
             .map(|ob| ob.spread())
@@ -122,7 +122,10 @@ impl MatchingEngine {
     ) -> Result<Quantity, String> {
         self.orderbooks
             .get(pair)
-            .map(|ob| ob.get_volume_at_price(&side, &price).unwrap_or(0))
+            .map(|ob| {
+                ob.get_volume_at_price(&side, &price)
+                    .unwrap_or(Quantity::ZERO)
+            })
             .ok_or_else(|| format!("Market for {} does not exist", pair))
     }
 

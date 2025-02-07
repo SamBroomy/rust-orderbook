@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use rust_decimal::Decimal;
+
 use super::types::*;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -10,6 +12,21 @@ pub enum OrderType {
     IOC(Price),
     // Fill or Kill
     FOK(Price),
+    SystemLevel(Price), // New variant for price level tracking
+}
+impl OrderType {
+    pub fn limit<P: Into<Price>>(price: P) -> Self {
+        OrderType::Limit(price.into())
+    }
+    pub fn ioc<P: Into<Price>>(price: P) -> Self {
+        OrderType::IOC(price.into())
+    }
+    pub fn fok<P: Into<Price>>(price: P) -> Self {
+        OrderType::FOK(price.into())
+    }
+    pub fn system_level<P: Into<Price>>(price: P) -> Self {
+        OrderType::SystemLevel(price.into())
+    }
 }
 
 impl Display for OrderType {
@@ -19,6 +36,7 @@ impl Display for OrderType {
             OrderType::Limit(_) => write!(f, "Limit"),
             OrderType::IOC(_) => write!(f, "IOC"),
             OrderType::FOK(_) => write!(f, "FOK"),
+            OrderType::SystemLevel(_) => write!(f, "SystemLevel"),
         }
     }
 }
@@ -29,6 +47,7 @@ impl OrderType {
             OrderType::Limit(price) => Some(*price),
             OrderType::IOC(price) => Some(*price),
             OrderType::FOK(price) => Some(*price),
+            OrderType::SystemLevel(price) => Some(*price),
             OrderType::Market => None,
         }
     }
@@ -70,20 +89,25 @@ pub struct OrderRequest {
 }
 
 impl OrderRequest {
-    pub fn new(side: Side, qty: Quantity, order_type: OrderType) -> Self {
+    pub fn new(side: Side, qty: impl Into<Quantity>, order_type: OrderType) -> Self {
         Self {
             id: create_order_id(),
             side,
-            qty,
+            qty: qty.into(),
             order_type,
         }
     }
 
-    pub fn new_with_id(id: OrderId, side: Side, qty: Quantity, order_type: OrderType) -> Self {
+    pub fn new_with_id(
+        id: OrderId,
+        side: Side,
+        qty: impl Into<Quantity>,
+        order_type: OrderType,
+    ) -> Self {
         Self {
             id,
             side,
-            qty,
+            qty: qty.into(),
             order_type,
         }
     }
@@ -91,13 +115,13 @@ impl OrderRequest {
     pub fn new_with_other_id(
         id: impl AsRef<[u8]>,
         side: Side,
-        qty: Quantity,
+        qty: impl Into<Quantity>,
         order_type: OrderType,
     ) -> Self {
         Self {
             id: create_id_from_bytes(id),
             side,
-            qty,
+            qty: qty.into(),
             order_type,
         }
     }
@@ -133,7 +157,8 @@ impl From<OrderRequest> for TradeOrder {
 }
 
 impl TradeOrder {
-    pub fn new(qty: Quantity) -> Self {
+    pub fn new(qty: impl Into<Quantity>) -> Self {
+        let qty = qty.into();
         Self {
             id: create_order_id(),
             side: Side::Ask,
@@ -146,14 +171,16 @@ impl TradeOrder {
     }
 
     /// Fills the order with the given quantity and price and returns the remaining quantity if the order was fully filled.
-    pub fn fill(&mut self, qty: &mut Quantity, price: Price, order_id: OrderId) {
+    pub fn fill(&mut self, qty: &mut Quantity, price: impl Into<Price>, order_id: OrderId) {
+        let price = price.into();
         let fill_qty = (*qty).min(self.remaining_qty);
         self.remaining_qty -= fill_qty;
         self.fills.push(Fill::new(fill_qty, price, order_id));
         *qty -= fill_qty;
     }
 
-    pub fn filled_by(&mut self, other: &mut TradeOrder, price: Price) -> Quantity {
+    pub fn filled_by(&mut self, other: &mut TradeOrder, price: impl Into<Price>) -> Quantity {
+        let price = price.into();
         let fill_qty = other.remaining_qty.min(self.remaining_qty);
         self.remaining_qty -= fill_qty;
         other.remaining_qty -= fill_qty;
@@ -167,7 +194,8 @@ impl TradeOrder {
     }
 
     /// Cancels the order with the given quantity and returns the remaining quantity if the order was fully cancelled.
-    pub fn cancel(&mut self, qty: Quantity) {
+    pub fn cancel(&mut self, qty: impl Into<Quantity>) {
+        let qty = qty.into();
         let qty = qty.min(self.remaining_qty);
         self.remaining_qty -= qty;
     }
@@ -187,7 +215,7 @@ pub struct OrderResult {
 
 impl From<TradeOrder> for OrderResult {
     fn from(trade_order: TradeOrder) -> Self {
-        let status = if trade_order.remaining_qty == 0 {
+        let status = if trade_order.remaining_qty == Decimal::ZERO {
             OrderStatus::Filled
         } else if trade_order.fills.is_empty() {
             match trade_order.order_type {
@@ -195,6 +223,7 @@ impl From<TradeOrder> for OrderResult {
                 OrderType::Limit(_) => OrderStatus::Open,
                 OrderType::IOC(_) => OrderStatus::Cancelled,
                 OrderType::FOK(_) => OrderStatus::Cancelled,
+                OrderType::SystemLevel(_) => OrderStatus::Open,
             }
         } else {
             match trade_order.order_type {
@@ -202,6 +231,7 @@ impl From<TradeOrder> for OrderResult {
                 OrderType::Limit(_) => OrderStatus::PartiallyFilled,
                 OrderType::IOC(_) => OrderStatus::PartiallyFilled,
                 OrderType::FOK(_) => OrderStatus::Cancelled,
+                OrderType::SystemLevel(_) => OrderStatus::PartiallyFilled,
             }
         };
         Self {
@@ -243,14 +273,14 @@ impl OrderResult {
         }
     }
 
-    pub fn avr_fill_price(&self) -> f32 {
-        let mut total = 0;
-        let mut qty = 0;
+    pub fn avr_fill_price(&self) -> Decimal {
+        let mut total = Decimal::ZERO;
+        let mut qty = Decimal::ZERO;
         for fill in &self.fills {
             total += fill.price * fill.qty;
             qty += fill.qty;
         }
-        total as f32 / qty as f32
+        total / qty
     }
 
     pub fn get_id(&self) -> OrderId {
@@ -294,19 +324,19 @@ mod tests {
     #[test]
     fn test_trade_order_creation() {
         let order = TradeOrder::new(100);
-        assert_eq!(order.remaining_qty, 100);
-        assert_eq!(order.initial_qty, 100);
+        assert_eq!(order.remaining_qty, 100.into());
+        assert_eq!(order.initial_qty, 100.into());
         assert!(order.fills.is_empty());
     }
 
     #[test]
     fn test_trade_order_fill() {
         let mut order = TradeOrder::new(100);
-        let mut fill_qty = 60;
+        let mut fill_qty = Decimal::from(60);
         order.fill(&mut fill_qty, 10, create_order_id());
-        assert_eq!(order.remaining_qty, 40);
+        assert_eq!(order.remaining_qty, 40.into());
         assert_eq!(order.fills.len(), 1);
-        assert_eq!(fill_qty, 0);
+        assert_eq!(fill_qty, Decimal::ZERO);
     }
 
     #[test]
@@ -314,9 +344,9 @@ mod tests {
         let mut order1 = TradeOrder::new(100);
         let mut order2 = TradeOrder::new(100);
         let fill_qty = order1.filled_by(&mut order2, 10);
-        assert_eq!(fill_qty, 100);
-        assert_eq!(order1.remaining_qty, 0);
-        assert_eq!(order2.remaining_qty, 0);
+        assert_eq!(fill_qty, Decimal::ONE_HUNDRED);
+        assert_eq!(order1.remaining_qty, Decimal::ZERO);
+        assert_eq!(order2.remaining_qty, Decimal::ZERO);
         assert_eq!(order1.fills.len(), 1);
         assert_eq!(order2.fills.len(), 1);
     }
@@ -326,9 +356,9 @@ mod tests {
         let mut order1 = TradeOrder::new(50);
         let mut order2 = TradeOrder::new(100);
         let fill_qty = order1.filled_by(&mut order2, 10);
-        assert_eq!(fill_qty, 50);
-        assert_eq!(order1.remaining_qty, 0);
-        assert_eq!(order2.remaining_qty, 50);
+        assert_eq!(fill_qty, 50.into());
+        assert_eq!(order1.remaining_qty, Decimal::ZERO);
+        assert_eq!(order2.remaining_qty, 50.into());
         assert_eq!(order1.fills.len(), 1);
         assert_eq!(order2.fills.len(), 1);
     }
@@ -340,15 +370,15 @@ mod tests {
         let mut order3 = TradeOrder::new(10);
         let mut order4 = TradeOrder::new(10);
         let fill_qty = order1.filled_by(&mut order2, 10);
-        assert_eq!(fill_qty, 10);
+        assert_eq!(fill_qty, 10.into());
         let fill_qty = order1.filled_by(&mut order3, 10);
-        assert_eq!(fill_qty, 10);
+        assert_eq!(fill_qty, 10.into());
         let fill_qty = order1.filled_by(&mut order4, 10);
-        assert_eq!(fill_qty, 10);
-        assert_eq!(order1.remaining_qty, 70);
-        assert_eq!(order2.remaining_qty, 0);
-        assert_eq!(order3.remaining_qty, 0);
-        assert_eq!(order4.remaining_qty, 0);
+        assert_eq!(fill_qty, 10.into());
+        assert_eq!(order1.remaining_qty, 70.into());
+        assert_eq!(order2.remaining_qty, 0.into());
+        assert_eq!(order3.remaining_qty, 0.into());
+        assert_eq!(order4.remaining_qty, 0.into());
         assert_eq!(order1.fills.len(), 3);
         assert_eq!(order2.fills.len(), 1);
         assert_eq!(order3.fills.len(), 1);
@@ -357,21 +387,21 @@ mod tests {
 
     #[test]
     fn test_order_request() {
-        let request = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
-        assert_eq!(request.price(), Some(10));
+        let request = OrderRequest::new(Side::Ask, 100, OrderType::limit(10));
+        assert_eq!(request.price(), Some(10.into()));
         let request = OrderRequest::new(Side::Bid, 100, OrderType::Market);
         assert_eq!(request.price(), None);
     }
 
     #[test]
     fn test_order_result() {
-        let request = OrderRequest::new(Side::Ask, 100, OrderType::Limit(10));
+        let request = OrderRequest::new(Side::Ask, 100, OrderType::limit(10));
         let id = request.id;
         let trade_order = TradeOrder::from(request);
         let result = OrderResult::from(trade_order);
         assert_eq!(result.status, OrderStatus::Open);
-        assert_eq!(result.remaining_qty, 100);
-        assert_eq!(result.initial_qty, 100);
+        assert_eq!(result.remaining_qty, 100.into());
+        assert_eq!(result.initial_qty, 100.into());
         assert_eq!(result.fills.len(), 0);
         assert_eq!(result.get_id(), id);
     }

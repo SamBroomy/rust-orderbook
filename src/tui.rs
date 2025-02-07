@@ -13,6 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame, Terminal,
 };
+use rust_decimal::Decimal;
 
 use crate::{OrderBook, OrderRequest, OrderResult, OrderType, Side, TradeExecution};
 
@@ -54,7 +55,7 @@ impl App {
         Self {
             order_book: OrderBook::default(),
             current_side: Side::Bid,
-            current_order_type: OrderType::Limit(0),
+            current_order_type: OrderType::limit(0),
             input_price: String::new(),
             input_quantity: String::new(),
             order_history: Vec::new(),
@@ -113,7 +114,7 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-            .split(f.size());
+            .split(f.area());
 
         let left_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -170,7 +171,10 @@ impl App {
                     .style(Style::default().fg(Color::Green));
                 f.render_widget(market, chunks[3]);
             }
-            OrderType::FOK(_) | OrderType::IOC(_) | OrderType::Limit(_) => {
+            OrderType::FOK(_)
+            | OrderType::IOC(_)
+            | OrderType::Limit(_)
+            | OrderType::SystemLevel(_) => {
                 let price = Paragraph::new(Span::raw(format!("Price: {}", self.input_price)))
                     .style(Style::default().fg(if self.input_mode == InputMode::Price {
                         Color::Green
@@ -250,18 +254,25 @@ impl App {
         let spread = self
             .order_book
             .best_ask()
-            .unwrap_or(0)
-            .saturating_sub(self.order_book.best_bid().unwrap_or(0));
+            .unwrap_or(Decimal::ZERO)
+            .saturating_sub(self.order_book.best_bid().unwrap_or(Decimal::ZERO));
         let volume = self
             .order_book
             .asks
             .iter_prices()
             .chain(self.order_book.bids.iter_prices())
             .map(|p| {
-                self.order_book.asks.get_total_qty(&p).unwrap_or(0)
-                    + self.order_book.bids.get_total_qty(&p).unwrap_or(0)
+                self.order_book
+                    .asks
+                    .get_total_qty(&p)
+                    .unwrap_or(Decimal::ZERO)
+                    + self
+                        .order_book
+                        .bids
+                        .get_total_qty(&p)
+                        .unwrap_or(Decimal::ZERO)
             })
-            .sum::<u64>();
+            .sum::<Decimal>();
 
         let summary = Paragraph::new(Line::from(vec![
             Span::raw("Spread: "),
@@ -307,9 +318,12 @@ impl App {
     fn cycle_order_type(&mut self) {
         self.current_order_type = match self.current_order_type {
             OrderType::Limit(_) => OrderType::Market,
-            OrderType::Market => OrderType::IOC(self.input_price.parse().unwrap_or(0)),
-            OrderType::IOC(_) => OrderType::FOK(self.input_price.parse().unwrap_or(0)),
-            OrderType::FOK(_) => OrderType::Limit(self.input_price.parse().unwrap_or(0)),
+            OrderType::Market => OrderType::IOC(self.input_price.parse().unwrap_or(Decimal::ZERO)),
+            OrderType::IOC(_) => OrderType::FOK(self.input_price.parse().unwrap_or(Decimal::ZERO)),
+            OrderType::FOK(_) => {
+                OrderType::Limit(self.input_price.parse().unwrap_or(Decimal::ZERO))
+            }
+            _ => OrderType::Limit(self.input_price.parse().unwrap_or(Decimal::ZERO)),
         };
     }
 
@@ -351,10 +365,11 @@ impl App {
         }
 
         self.current_order_type = match self.current_order_type {
-            OrderType::Limit(_) => OrderType::Limit(price),
+            OrderType::Limit(_) => OrderType::limit(price),
             OrderType::Market => OrderType::Market,
-            OrderType::IOC(_) => OrderType::IOC(price),
-            OrderType::FOK(_) => OrderType::FOK(price),
+            OrderType::IOC(_) => OrderType::ioc(price),
+            OrderType::FOK(_) => OrderType::fok(price),
+            OrderType::SystemLevel(_) => OrderType::system_level(price),
         };
         let order_type = self.current_order_type;
 
@@ -387,7 +402,7 @@ impl App {
         if executions.is_empty() {
             self.status_message = format!("Order placed: {:?}", result.status);
         } else {
-            let total_executed: u64 = executions.iter().map(|e| e.qty).sum();
+            let total_executed = executions.iter().map(|e| e.qty).sum::<Decimal>();
             self.status_message = format!("Order executed: {} units filled", total_executed);
         }
     }

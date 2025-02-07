@@ -50,12 +50,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut order_book = OrderBook::default();
 
     let schema = Schema::from_iter(vec![
-        Field::new("Time", DataType::Float64),
-        Field::new("Event Type", DataType::Int32),
-        Field::new("Order Id", DataType::Int64),
-        Field::new("Size", DataType::Int64),
-        Field::new("Price", DataType::Int64),
-        Field::new("Direction", DataType::Int32),
+        Field::new("Time".into(), DataType::Float64),
+        Field::new("Event Type".into(), DataType::Int32),
+        Field::new("Order Id".into(), DataType::Int64),
+        Field::new("Size".into(), DataType::Int64),
+        Field::new("Price".into(), DataType::Int64),
+        Field::new("Direction".into(), DataType::Int32),
     ]);
 
     // Read the LOBSTER data
@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => panic!("Invalid quantity"),
         };
         let order_type = OrderType::Limit(match row[4] {
-            AnyValue::Int64(price) => price.try_into().unwrap(),
+            AnyValue::Int64(price) => price.into(),
             _ => panic!("Invalid price"),
         });
 
@@ -150,8 +150,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // }
         }
     }
-    println!("Elapsed time: {:?}", start_time.elapsed());
     println!("{:#?}", order_book.get_order_book_state());
+    println!("Elapsed time: {:?}", start_time.elapsed());
     println!("Best ask: {:?}", order_book.best_ask());
     println!("Best bid: {:?}", order_book.best_bid());
     println!("Best prices: {:?}", order_book.best_prices());
