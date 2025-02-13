@@ -1,9 +1,11 @@
 use std::fmt::Display;
 
+use log::warn;
 use rust_decimal::Decimal;
 
 use super::types::*;
 
+/// Type of an order that can be placed.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum OrderType {
     Market,
@@ -15,17 +17,41 @@ pub enum OrderType {
     SystemLevel(Price), // New variant for price level tracking
 }
 impl OrderType {
-    pub fn limit<P: Into<Price>>(price: P) -> Self {
+    pub fn limit(price: impl Into<Price>) -> Self {
         OrderType::Limit(price.into())
     }
-    pub fn ioc<P: Into<Price>>(price: P) -> Self {
+    /// Helper function to create an immediate or cancel order type.
+    pub fn ioc(price: impl Into<Price>) -> Self {
         OrderType::IOC(price.into())
     }
-    pub fn fok<P: Into<Price>>(price: P) -> Self {
+    /// Helper function to create a fill or kill order type.
+    pub fn fok(price: impl Into<Price>) -> Self {
         OrderType::FOK(price.into())
     }
-    pub fn system_level<P: Into<Price>>(price: P) -> Self {
+    /// Helper function to create a system level order type.
+    pub fn system_level(price: impl Into<Price>) -> Self {
         OrderType::SystemLevel(price.into())
+    }
+    /// Generates a unique order id for the order type.
+    pub fn generate_id(&self) -> OrderId {
+        match self {
+            OrderType::Market => create_order_id(),
+            OrderType::Limit(_) => create_order_id(),
+            OrderType::IOC(_) => create_order_id(),
+            OrderType::FOK(_) => create_order_id(),
+            // When using the system level order type, we want to use the price as the id. This is so we can create a system level order for a specific price level.
+            OrderType::SystemLevel(p) => create_id_from_bytes(p.to_string().as_bytes()),
+        }
+    }
+    /// Returns the price of the order if it has one.
+    pub fn price(&self) -> Option<Price> {
+        match self {
+            OrderType::Limit(price) => Some(*price),
+            OrderType::IOC(price) => Some(*price),
+            OrderType::FOK(price) => Some(*price),
+            OrderType::SystemLevel(price) => Some(*price),
+            OrderType::Market => None,
+        }
     }
 }
 
@@ -41,18 +67,7 @@ impl Display for OrderType {
     }
 }
 
-impl OrderType {
-    pub fn price(&self) -> Option<Price> {
-        match self {
-            OrderType::Limit(price) => Some(*price),
-            OrderType::IOC(price) => Some(*price),
-            OrderType::FOK(price) => Some(*price),
-            OrderType::SystemLevel(price) => Some(*price),
-            OrderType::Market => None,
-        }
-    }
-}
-
+/// Status of an order.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OrderStatus {
     Open,
@@ -60,7 +75,7 @@ pub enum OrderStatus {
     PartiallyFilled,
     Cancelled,
 }
-
+/// Fill is a record of a trade that has been executed.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Fill {
     pub qty: Quantity,
@@ -80,6 +95,7 @@ impl Fill {
     }
 }
 
+/// OrderRequest is a request to place an order.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct OrderRequest {
     id: OrderId,
@@ -90,8 +106,9 @@ pub struct OrderRequest {
 
 impl OrderRequest {
     pub fn new(side: Side, qty: impl Into<Quantity>, order_type: OrderType) -> Self {
+        let id = order_type.generate_id();
         Self {
-            id: create_order_id(),
+            id,
             side,
             qty: qty.into(),
             order_type,
@@ -129,8 +146,13 @@ impl OrderRequest {
     pub fn price(&self) -> Option<Price> {
         self.order_type.price()
     }
+
+    pub fn id(&self) -> OrderId {
+        self.id
+    }
 }
 
+/// TradeOrder is an order that has been placed and is being tracked by the order book.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TradeOrder {
     pub id: OrderId,
@@ -139,11 +161,13 @@ pub struct TradeOrder {
     initial_qty: Quantity,
     fills: Vec<Fill>,
     pub order_type: OrderType,
-    timestamp: Timestamp,
+    creation_timestamp: Timestamp,
+    last_modified_timestamp: Timestamp,
 }
 
 impl From<OrderRequest> for TradeOrder {
     fn from(order_request: OrderRequest) -> Self {
+        let ts = timestamp();
         Self {
             id: order_request.id,
             side: order_request.side,
@@ -151,7 +175,8 @@ impl From<OrderRequest> for TradeOrder {
             initial_qty: order_request.qty,
             fills: Vec::new(),
             order_type: order_request.order_type,
-            timestamp: timestamp(),
+            creation_timestamp: ts,
+            last_modified_timestamp: ts,
         }
     }
 }
@@ -159,6 +184,7 @@ impl From<OrderRequest> for TradeOrder {
 impl TradeOrder {
     pub fn new(qty: impl Into<Quantity>) -> Self {
         let qty = qty.into();
+        let ts = timestamp();
         Self {
             id: create_order_id(),
             side: Side::Ask,
@@ -166,19 +192,20 @@ impl TradeOrder {
             initial_qty: qty,
             fills: Vec::new(),
             order_type: OrderType::Market,
-            timestamp: timestamp(),
+            creation_timestamp: ts,
+            last_modified_timestamp: ts,
         }
     }
-
-    /// Fills the order with the given quantity and price and returns the remaining quantity if the order was fully filled.
+    /// Fills the order with the given quantity and price.
     pub fn fill(&mut self, qty: &mut Quantity, price: impl Into<Price>, order_id: OrderId) {
         let price = price.into();
         let fill_qty = (*qty).min(self.remaining_qty);
         self.remaining_qty -= fill_qty;
         self.fills.push(Fill::new(fill_qty, price, order_id));
         *qty -= fill_qty;
+        self.last_modified_timestamp = timestamp();
     }
-
+    /// Fills the order with the given quantity and price and returns the remaining quantity if the order was fully filled.
     pub fn filled_by(&mut self, other: &mut TradeOrder, price: impl Into<Price>) -> Quantity {
         let price = price.into();
         let fill_qty = other.remaining_qty.min(self.remaining_qty);
@@ -186,18 +213,34 @@ impl TradeOrder {
         other.remaining_qty -= fill_qty;
         self.fills.push(Fill::new(fill_qty, price, other.id));
         other.fills.push(Fill::new(fill_qty, price, self.id));
+        self.last_modified_timestamp = timestamp();
         fill_qty
     }
-
+    /// Returns the quantity that has been filled.
     pub fn filled_quantity(&self) -> Quantity {
         self.initial_qty - self.remaining_qty
     }
-
     /// Cancels the order with the given quantity and returns the remaining quantity if the order was fully cancelled.
     pub fn cancel(&mut self, qty: impl Into<Quantity>) {
         let qty = qty.into();
         let qty = qty.min(self.remaining_qty);
         self.remaining_qty -= qty;
+    }
+
+    pub fn mergable(&self, other: &TradeOrder) -> bool {
+        self.side == other.side && self.order_type == other.order_type
+    }
+
+    pub fn merge(&mut self, mut other: TradeOrder) -> Option<Self> {
+        if !self.mergable(&other) {
+            warn!("Cannot merge orders with different side or order type");
+            return Some(other);
+        }
+        self.remaining_qty += other.remaining_qty;
+        self.initial_qty += other.initial_qty;
+        self.fills.append(&mut other.fills);
+        self.last_modified_timestamp = timestamp();
+        None
     }
 }
 

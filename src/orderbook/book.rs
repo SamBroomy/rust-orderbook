@@ -212,7 +212,11 @@ impl HalfBook {
         self.price_levels = SparseVec::with_capacity(10_000);
     }
 }
-
+#[derive(Debug)]
+pub struct OrderBookState {
+    pub asks: Vec<(Price, Quantity)>,
+    pub bids: Vec<(Price, Quantity)>,
+}
 #[derive(Debug)]
 pub struct OrderBook {
     pub asks: HalfBook,
@@ -311,7 +315,7 @@ impl OrderBook {
         };
         let mut trade_order = TradeOrder::from(order);
 
-        let filtered_prices: Vec<_> = opposite_book
+        let filtered_prices = opposite_book
             .iter_prices()
             .filter(|p| match &trade_order.order_type {
                 // Market order no filtering required
@@ -324,7 +328,7 @@ impl OrderBook {
                     Side::Ask => price <= p,
                 },
             })
-            .collect();
+            .collect::<Vec<_>>();
 
         for p in filtered_prices {
             let mut price_executions = opposite_book.match_order(&mut trade_order, p);
@@ -334,18 +338,40 @@ impl OrderBook {
             }
         }
 
-        if let OrderType::Limit(price) = trade_order.order_type {
-            if price > Decimal::ZERO && trade_order.remaining_qty > Decimal::ZERO {
-                self.add_limit_order(trade_order.side, price, trade_order.clone());
+        match &trade_order.order_type {
+            OrderType::Limit(price) => {
+                if price > &Decimal::ZERO && trade_order.remaining_qty > Decimal::ZERO {
+                    self.add_limit_order(trade_order.side, *price, trade_order.clone());
+                }
             }
+            OrderType::SystemLevel(price) => {
+                if price > &Decimal::ZERO && trade_order.remaining_qty > Decimal::ZERO {
+                    self.add_system_order(trade_order.side, *price, trade_order.clone());
+                }
+            }
+            OrderType::Market | OrderType::IOC(_) | OrderType::FOK(_) => {}
         }
-
         (OrderResult::from(trade_order), executions)
     }
 
-    pub fn add_limit_order(&mut self, side: Side, price: Price, order: TradeOrder) {
-        self.order_loc.insert(order.id, (side, price));
+    pub fn add_limit_order(&mut self, side: Side, price: impl Into<Price>, order: TradeOrder) {
+        let price = price.into();
+        assert_eq!(self.order_loc.insert(order.id, (side, price)), None);
         self.get_mut_book(&side).add_order(price, order);
+    }
+
+    // When a system order is added to the orderbook we need to merge it with the existing order if it exists
+    pub fn add_system_order(&mut self, side: Side, price: impl Into<Price>, order: TradeOrder) {
+        let price = price.into();
+        match self.get_order_mut(&order.id) {
+            Some(existing_order) => {
+                assert_eq!(existing_order.merge(order), None);
+            }
+            None => {
+                self.order_loc.insert(order.id, (side, price));
+                self.get_mut_book(&side).add_order(price, order);
+            }
+        };
     }
 
     pub fn spread(&self) -> Option<Price> {
@@ -358,14 +384,7 @@ impl OrderBook {
     pub fn get_depth(&self) -> (usize, usize) {
         (self.asks.get_depth(), self.bids.get_depth())
     }
-}
 
-#[derive(Debug)]
-pub struct OrderBookState {
-    pub asks: Vec<(Price, Quantity)>,
-    pub bids: Vec<(Price, Quantity)>,
-}
-impl OrderBook {
     fn get_book(&self, side: &Side) -> &HalfBook {
         match side {
             Side::Ask => &self.asks,
@@ -470,6 +489,34 @@ mod tests {
         assert_eq!(result.status, OrderStatus::Open);
         assert!(executions.is_empty());
         assert_eq!(book.best_ask(), Some(10.into()));
+    }
+
+    #[test]
+    fn test_order_book_add_system_order() {
+        let mut book = OrderBook::default();
+        let order1 = OrderRequest::new(Side::Ask, 100, OrderType::system_level(10));
+        let id1 = order1.id();
+        let (result, executions) = book.add_order(order1);
+        assert_eq!(result.status, OrderStatus::Open);
+        assert!(executions.is_empty());
+        assert_eq!(book.best_ask(), Some(10.into()));
+        // Test adding a second order at the same price level to test merging
+        let order2 = OrderRequest::new(Side::Ask, 50, OrderType::system_level(10));
+        let id2 = order2.id();
+        assert_eq!(id1, id2);
+        let (result, executions) = book.add_order(order2);
+        assert_eq!(result.status, OrderStatus::Open);
+        assert!(executions.is_empty());
+        assert_eq!(book.best_ask(), Some(10.into()));
+
+        let order1 = book.get_order(id1).unwrap();
+        assert_eq!(order1.remaining_qty, 150.into());
+        let order3 = OrderRequest::new(Side::Bid, 200, OrderType::system_level(10));
+        let (result, executions) = book.add_order(order3);
+        assert_eq!(result.status, OrderStatus::PartiallyFilled);
+        assert!(!executions.is_empty());
+        assert_eq!(book.best_ask(), None);
+        assert_eq!(book.best_bid(), Some(10.into()));
     }
 
     #[test]

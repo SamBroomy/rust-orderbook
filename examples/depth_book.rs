@@ -1,6 +1,6 @@
 use env_logger::Builder;
 use futures_util::StreamExt;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use rust_decimal::Decimal;
 use serde::{de, Deserialize, Deserializer};
 use std::{
@@ -129,6 +129,12 @@ impl WebSocketComponent {
         );
 
         let (mut socket, response) = connect_async(&url).await?;
+        info!("Connected to binance stream.");
+        info!("HTTP status code: {}", response.status());
+        info!("Response headers:");
+        for (ref header, header_value) in response.headers() {
+            info!("- {}: {:?}", header, header_value);
+        }
         info!("WebSocket connected, starting update buffer");
 
         loop {
@@ -188,7 +194,7 @@ impl Component for StateComponent {
 
         info!("Processing buffered updates...");
         let mut buffer = Vec::new();
-        self.data_rx.recv_many(&mut buffer, 1000).await;
+        self.data_rx.recv_many(&mut buffer, usize::MAX).await;
         let buffer = buffer
             .into_iter()
             .filter_map(|msg| match msg {
@@ -274,7 +280,7 @@ impl StateComponent {
         // let snapshot: DepthSnapshot = serde_json::from_str(&data)?;
 
         let url = format!(
-            "https://api.binance.com/api/v3/depth?symbol={}&limit=1000",
+            "https://api.binance.com/api/v3/depth?symbol={}&limit=5000",
             self.symbol.to_uppercase()
         );
         let snapshot: DepthSnapshot = reqwest::get(url).await?.json().await?;
@@ -383,7 +389,7 @@ impl DepthBookCoordinator {
 
         let ws_handle = tokio::spawn(async move { ws_component.start().await });
         info!("Waiting for initial buffering...");
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
         let state_handle = tokio::spawn(async move { state_component.start().await });
 
@@ -437,6 +443,10 @@ impl OrderBookState {
     }
 
     fn process_update(&mut self, update: DepthUpdate) -> Result<()> {
+        warn!(
+            "Processing update: [{}, {}]",
+            update.first_update_id, update.final_update_id
+        );
         if update.final_update_id <= self.last_update_id {
             debug!("Ignoring old update");
             return Ok(()); // Silently ignore old updates
@@ -453,7 +463,7 @@ impl OrderBookState {
 
     fn process_buffer(&mut self, mut buffer: VecDeque<DepthUpdate>) -> Result<()> {
         let buffer_size = buffer.len();
-        info!("Processing {} buffered updates", buffer_size);
+        warn!("Processing {} buffered updates", buffer_size);
 
         while let Some(update) = buffer.pop_front() {
             if update.final_update_id <= self.last_update_id {
@@ -478,17 +488,69 @@ impl OrderBookState {
     fn apply_update_changes(&mut self, update: DepthUpdate) -> Result<()> {
         for OfferData { price, size } in &update.bids {
             if *size > Decimal::ZERO {
-                self.bids.insert(*price, *size);
+                let price = *price;
+                let size = *size;
+                match self.bids.insert(price, size) {
+                    Some(existing_size) => {
+                        if existing_size != size {
+                            debug!(
+                                "Updated bid price: {} from {} to {} diff: {}",
+                                price,
+                                existing_size,
+                                size,
+                                existing_size - size
+                            );
+                        } else {
+                            debug!("Bid price: {} size unchanged: {}", price, size);
+                        }
+                    }
+                    None => {
+                        debug!("New bid price: {} with size: {}", price, size);
+                    }
+                }
             } else {
-                self.bids.remove(price);
+                match self.bids.remove(price) {
+                    Some(existing_size) => {
+                        debug!("Removed bid price: {} with size: {}", price, existing_size);
+                    }
+                    None => {
+                        debug!("Ignoring zero size bid price: {}", price);
+                    }
+                }
             }
         }
 
         for OfferData { price, size } in &update.asks {
             if *size > Decimal::ZERO {
-                self.asks.insert(*price, *size);
+                let price = *price;
+                let size = *size;
+                match self.asks.insert(price, size) {
+                    Some(existing_size) => {
+                        if existing_size != size {
+                            debug!(
+                                "Updated ask price: {} from {} to {} diff: {}",
+                                price,
+                                existing_size,
+                                size,
+                                existing_size - size
+                            );
+                        } else {
+                            debug!("Ask price: {} size unchanged: {}", price, size);
+                        }
+                    }
+                    None => {
+                        debug!("New ask price: {} with size: {}", price, size);
+                    }
+                }
             } else {
-                self.asks.remove(price);
+                match self.asks.remove(price) {
+                    Some(existing_size) => {
+                        debug!("Removed ask price: {} with size: {}", price, existing_size);
+                    }
+                    None => {
+                        warn!("Ignoring zero size ask price: {}", price);
+                    }
+                }
             }
         }
 
@@ -503,7 +565,7 @@ impl OrderBookState {
 #[tokio::main]
 async fn main() -> Result<()> {
     Builder::from_default_env()
-        .filter(None, log::LevelFilter::Info)
+        .filter(None, log::LevelFilter::Debug)
         .init();
     let (depth_book, coordinator) = DepthBook::new("btcusdt".to_string());
 

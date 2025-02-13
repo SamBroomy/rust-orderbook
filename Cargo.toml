@@ -42,6 +42,8 @@ tokio-tungstenite = { version = "0.26.1", features = ["native-tls", "rustls"] }
 rust_decimal = "1.36.0"
 reqwest = { version = "0.12.12", features = ["json"] }
 anyhow = "1.0.95"
+ahash = "0.8.11"
+dashmap = "6.1.0"
 #pyo3 = { version = "0.18.1", features = ["extension-module"] }
 
 
